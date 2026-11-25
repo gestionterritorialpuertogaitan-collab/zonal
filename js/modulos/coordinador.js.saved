@@ -1,0 +1,1317 @@
+/* =====================================================================
+   MÓDULO COORDINADOR — Administrador de barrio (NIVEL 3)
+   ===================================================================== */
+(function () {
+
+  /* ==================================================================
+     VISTA 1 — BANDEJA DE APROBACIONES
+     ================================================================== */
+  function vistaAprobaciones() {
+    return {
+      etiqueta: "BANDEJA DE APROBACIONES", icono: "✅",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("BANDEJA DE APROBACIONES", "ÚNICO AUTORIZADO PARA DECIDIR «APRUEBO» O «NIEGO». AL APROBAR, LA PETICIÓN PASA AUTOMÁTICAMENTE A PUBLICIDAD O COMPRAS.") +
+          UI.barra(
+            '<input class="entrada-buscar" type="search" placeholder="BUSCAR SOLICITANTE, TÍTULO, CATEGORÍA...">' +
+            '<select id="f-est" class="entrada-buscar" style="max-width:220px">' +
+              '<option value="">TODOS LOS ESTADOS</option>' +
+              '<option value="PENDIENTE">PENDIENTES</option>' +
+              '<option value="APROBADA">APROBADAS</option>' +
+              '<option value="NEGADA">NEGADAS</option>' +
+            "</select>" +
+            '<button class="btn btn-suave" data-t="csv">EXPORTAR CSV</button>' +
+            '<button class="btn btn-suave" data-t="print">IMPRIMIR</button>              <button class="btn btn-suave" data-t="pdf">DESCARGAR PDF</button>' +
+            '<button class="btn btn-primario" data-t="ref">ACTUALIZAR</button>'
+          ) + '<div id="zona"></div>';
+
+        const zona = cont.querySelector("#zona");
+        const barra = cont.querySelector(".barra");
+        const buscador = barra.querySelector(".entrada-buscar");
+        const filtro = barra.querySelector("#f-est");
+        let datos = [];
+
+        async function cargar() {
+          zona.innerHTML = UI.cargandoTabla();
+          try { datos = await FS.peticionesDelCoordinador(App.perfil.id); pintar(); }
+          catch (e) { zona.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        function filtrados() {
+          const q = U.UP(buscador.value);
+          const est = filtro.value;
+          return datos.filter(function (p) {
+            if (est && p.estado !== est) return false;
+            return !q || U.contiene(U.unir([p.creadoPorNombre, p.titulo, p.detalle, p.categoria]), q);
+          });
+        }
+
+        function pintar() {
+          const lista = filtrados();
+          const pendientes = datos.filter(function (p) { return p.estado === "PENDIENTE"; }).length;
+
+          const filas = lista.map(function (p) {
+            const acciones = p.estado === "PENDIENTE"
+              ? '<div class="grp-acciones">' +
+                  '<button class="btn btn-mini btn-exito" data-apr="' + p.id + '">APRUEBO</button>' +
+                  '<button class="btn btn-mini btn-peligro" data-nie="' + p.id + '">NIEGO</button>' +
+                "</div>"
+              : '<span class="menor">RESUELTA</span>';
+
+            return [
+              U.esc(U.fecha(p.fecha)),
+              U.esc(U.UP(p.creadoPorNombre || "—")) + "<br><span class=\"menor\">" +
+                U.esc(U.UP(p.rolCreador || "")) + "</span>",
+              UI.sello(p.categoria, { COMPRAS: "naranja", PUBLICIDAD: "azul" }),
+              "<strong>" + U.esc(U.UP(p.titulo)) + "</strong><br><span class=\"menor\">" +
+                U.esc(U.UP(p.detalle)) + "</span>",
+              UI.selloEstado(p.estado),
+              UI.selloEstadoArea(p.estadoArea),
+              acciones
+            ];
+          });
+
+          zona.innerHTML =
+            UI.resumen([
+              { valor: pendientes, etiqueta: "PENDIENTES DE DECISIÓN", color: "naranja" },
+              { valor: datos.filter(function (p) { return p.estado === "APROBADA"; }).length, etiqueta: "APROBADAS", color: "verde" },
+              { valor: datos.filter(function (p) { return p.estado === "NEGADA"; }).length, etiqueta: "NEGADAS", color: "rojo" },
+              { valor: datos.filter(function (p) { return p.estadoArea === "ENTREGADO"; }).length, etiqueta: "ENTREGADAS", color: "verde" }
+            ]) +
+            UI.tabla(
+              ["FECHA", "SOLICITANTE", "CATEGORÍA", "TÍTULO / DETALLE", "DECISIÓN", "ESTADO ÁREA", "ACCIONES"],
+              filas
+            );
+
+          zona.querySelectorAll("[data-apr]").forEach(function (b) {
+            b.addEventListener("click", function () { decidir(b.dataset.apr, "APROBADA"); });
+          });
+          zona.querySelectorAll("[data-nie]").forEach(function (b) {
+            b.addEventListener("click", function () { decidir(b.dataset.nie, "NEGADA"); });
+          });
+        }
+
+        async function decidir(id, estado) {
+          const etiqueta = estado === "APROBADA" ? "APROBAR" : "NEGAR";
+          const ok = await UI.confirmar("¿DESEA " + etiqueta + " ESTA PETICIÓN?");
+          if (!ok) return;
+          UI.cargando(true);
+          try {
+            await FS.actualizar("peticiones", id, {
+              estado: estado,
+              estadoArea: estado === "APROBADA" ? "EN ESPERA" : null,
+              decididoPorId: App.perfil.id,
+              decididoPorNombre: App.perfil.nombre,
+              fechaDecision: U.ahora()
+            });
+            UI.toast("PETICIÓN " + etiqueta + "DA · TRASLADO AUTOMÁTICO REALIZADO");
+            await cargar();
+          } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+          UI.cargando(false);
+        }
+
+        Comun.herramientas(barra, zona, {
+          recargar: cargar, pintar: pintar, filtrados: filtrados,
+          tituloCSV: "Bandeja_Aprobaciones",
+          encabezadosCSV: ["FECHA", "SOLICITANTE", "ROL", "CATEGORIA", "TITULO", "DETALLE", "DECISION", "ESTADO AREA"],
+          filaCSV: function (p) {
+            return [p.fecha, p.creadoPorNombre, p.rolCreador, p.categoria, p.titulo, p.detalle, p.estado, p.estadoArea];
+          }
+        });
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 2 — ESTRUCTURA DE EQUIPO (3 MODOS)
+     ================================================================== */
+  function vistaEquipo() {
+    return {
+      etiqueta: "ESTRUCTURA DE EQUIPO", icono: "👥",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("TABLA DE ESTRUCTURA DEL EQUIPO", "TRES MODOS DE VISTA: ① SUB-COORDINADORES CON LÍDERES DESPLEGABLES · ② SOLO LÍDERES · ③ ORDEN JERÁRQUICO ESTRICTO.") +
+          UI.barra(
+            '<select id="f-modo" class="entrada-buscar" style="max-width:420px">' +
+              '<option value="1">MODO 1 · SUB-COORDINADORES + BOTÓN «VER LÍDERES»</option>' +
+              '<option value="2">MODO 2 · SOLO LÍDERES DEL BARRIO</option>' +
+              '<option value="3">MODO 3 · ORDEN JERÁRQUICO ESTRICTO</option>' +
+            "</select>" +
+            '<input class="entrada-buscar" type="search" placeholder="BUSCAR...">' +
+            '<button class="btn btn-suave" data-t="csv">EXPORTAR CSV</button>' +
+            '<button class="btn btn-suave" data-t="print">IMPRIMIR</button>              <button class="btn btn-suave" data-t="pdf">DESCARGAR PDF</button>' +
+            '<button class="btn btn-primario" data-t="ref">ACTUALIZAR</button>'
+          ) + '<div id="zona"></div>';
+
+        const zona = cont.querySelector("#zona");
+        const barra = cont.querySelector(".barra");
+        const buscador = barra.querySelector(".entrada-buscar");
+        const selModo = barra.querySelector("#f-modo");
+
+        let subs = [], lideres = [], coordinador = null;
+
+        async function cargar() {
+          zona.innerHTML = UI.cargandoTabla();
+          try {
+            coordinador = App.perfil;
+            const equipo = await FS.equipoDelCoordinador(App.perfil.id);
+            subs = equipo.subcoordinadores;
+            lideres = equipo.lideres;
+            pintar();
+          } catch (e) { zona.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        function filtrar(lista) {
+          const q = U.UP(buscador.value);
+          if (!q) return lista;
+          return lista.filter(function (u) {
+            return U.contiene(U.unir([u.nombre, u.usuario, u.telefono, u.estado]), q);
+          });
+        }
+
+        /* ---------- MODO 1 ---------- */
+        function htmlModo1() {
+          const lista = filtrar(subs);
+          if (!lista.length) return UI.alerta("info", "NO HAY SUB-COORDINADORES REGISTRADOS EN ESTE BARRIO.");
+          let h = '<div class="tabla-cont"><table class="responsive"><thead><tr>' +
+            "<th>SUB-COORDINADOR</th><th>CÉDULA</th><th>TELÉFONO</th><th>ESTADO</th><th>N.º LÍDERES</th><th>ACCIONES</th>" +
+            "</tr></thead><tbody>";
+          lista.forEach(function (s) {
+            const sus = lideres.filter(function (l) { return l.subcoordinadorId === s.id; });
+            h += "<tr>" +
+              '<td data-label="SUB-COORDINADOR"><strong>' + U.esc(U.UP(s.nombre)) + "</strong></td>" +
+              '<td data-label="CÉDULA">' + U.esc(s.usuario) + "</td>" +
+              '<td data-label="TELÉFONO">' + U.esc(s.telefono || "—") + "</td>" +
+              '<td data-label="ESTADO">' + UI.selloEstado(s.estado) + "</td>" +
+              '<td data-label="N.º LÍDERES">' + sus.length + "</td>" +
+              '<td data-label="ACCIONES"><button class="btn btn-mini btn-azul2 btn-verlideres" data-det="' + s.id + '">VER LÍDERES</button></td>' +
+              "</tr>";
+            h += '<tr class="fila-detalle" id="det-' + s.id + '" style="display:none">' +
+              '<td colspan="6" data-label="LÍDERES ASIGNADOS">';
+            if (sus.length) {
+              h += '<table class="responsive" style="min-width:0"><thead><tr>' +
+                "<th>LÍDER</th><th>CÉDULA</th><th>TELÉFONO</th><th>ESTADO</th></tr></thead><tbody>" +
+                sus.map(function (l) {
+                  return "<tr>" +
+                    '<td data-label="LÍDER">' + U.esc(U.UP(l.nombre)) + "</td>" +
+                    '<td data-label="CÉDULA">' + U.esc(l.usuario) + "</td>" +
+                    '<td data-label="TELÉFONO">' + U.esc(l.telefono || "—") + "</td>" +
+                    '<td data-label="ESTADO">' + UI.selloEstado(l.estado) + "</td>" +
+                    "</tr>";
+                }).join("") + "</tbody></table>";
+            } else {
+              h += '<span class="menor">ESTE SUB-COORDINADOR AÚN NO TIENE LÍDERES ASIGNADOS.</span>';
+            }
+            h += "</td></tr>";
+          });
+          h += "</tbody></table></div>";
+          h += '<p class="nota-tabla no-imprimir">TOTAL SUB-COORDINADORES: ' + lista.length + "</p>";
+          return h;
+        }
+
+        /* ---------- MODO 2 ---------- */
+        function htmlModo2() {
+          const lista = filtrar(lideres);
+          return UI.tabla(
+            ["LÍDER", "CÉDULA", "TELÉFONO", "GRUPO (SUB-COORDINADOR)", "ESTADO"],
+            lista.map(function (l) {
+              const sub = subs.find(function (s) { return s.id === l.subcoordinadorId; });
+              return [
+                U.esc(U.UP(l.nombre)),
+                U.esc(l.usuario),
+                U.esc(l.telefono || "—"),
+                U.esc(U.UP(sub ? sub.nombre : "SIN ASIGNAR")),
+                UI.selloEstado(l.estado)
+              ];
+            })
+          ) + '<p class="nota-tabla no-imprimir">TOTAL LÍDERES: ' + lista.length + "</p>";
+        }
+
+        /* ---------- MODO 3 ---------- */
+        function htmlModo3() {
+          const q = U.UP(buscador.value);
+          const filas = [];
+          filas.push([
+            "① COORDINADOR", U.esc(U.UP(coordinador.nombre)), U.esc(coordinador.usuario),
+            U.esc(coordinador.telefono || "—"), U.esc(U.UP(coordinador.barrio)),
+            UI.selloEstado(coordinador.estado)
+          ]);
+          subs.forEach(function (s) {
+            if (q && !U.contiene(U.unir([s.nombre, s.usuario]), q)) return;
+            filas.push([
+              "&nbsp;&nbsp;② SUB-COORDINADOR", U.esc(U.UP(s.nombre)), U.esc(s.usuario),
+              U.esc(s.telefono || "—"), U.esc(U.UP(s.barrio)), UI.selloEstado(s.estado)
+            ]);
+            lideres.filter(function (l) { return l.subcoordinadorId === s.id; }).forEach(function (l) {
+              if (q && !U.contiene(U.unir([l.nombre, l.usuario]), q)) return;
+              filas.push([
+                "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;③ LÍDER", U.esc(U.UP(l.nombre)), U.esc(l.usuario),
+                U.esc(l.telefono || "—"), U.esc(U.UP(l.barrio)), UI.selloEstado(l.estado)
+              ]);
+            });
+          });
+          return UI.tabla(["NIVEL", "NOMBRE", "CÉDULA", "TELÉFONO", "BARRIO", "ESTADO"], filas);
+        }
+
+        function pintar() {
+          const modo = selModo.value;
+          if (modo === "1") zona.innerHTML = htmlModo1();
+          else if (modo === "2") zona.innerHTML = htmlModo2();
+          else zona.innerHTML = htmlModo3();
+
+          zona.querySelectorAll("[data-det]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              const fila = document.getElementById("det-" + b.dataset.det);
+              if (!fila) return;
+              const visible = fila.style.display !== "none";
+              fila.style.display = visible ? "none" : "";
+              b.textContent = visible ? "VER LÍDERES" : "OCULTAR LÍDERES";
+              b.classList.toggle("btn-azul2", visible);
+              b.classList.toggle("btn-naranja", !visible);
+            });
+          });
+        }
+
+        selModo.addEventListener("change", pintar);
+        Comun.herramientas(barra, zona, {
+          recargar: cargar, pintar: pintar, filtrados: function () { return filtrar(lideres); },
+          tituloCSV: "Estructura_Equipo",
+          encabezadosCSV: ["NIVEL", "NOMBRE", "CEDULA", "TELEFONO", "BARRIO", "ESTADO"],
+          filaCSV: function (l) {
+            const sub = subs.find(function (s) { return s.id === l.subcoordinadorId; });
+            return ["LIDER", l.nombre, l.usuario, l.telefono, l.barrio, l.estado];
+          }
+        });
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 3 — CREAR USUARIOS (SUB-COORDINADORES Y LÍDERES)
+     ================================================================== */
+  function vistaCrearUsuarios() {
+    return {
+      etiqueta: "CREAR USUARIOS", icono: "➕",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("CREAR CUENTAS DE SUB-COORDINADORES Y LÍDERES", "USUARIOS Y CONTRASEÑAS EN MAYÚSCULAS PARA SU BARRIO.") +
+          '<div class="tarjeta"><h3>NUEVA CUENTA</h3><div id="zona-form"></div></div>' +
+          '<div class="tarjeta"><h3>CUENTAS DE MI BARRIO</h3>' +
+            '<div class="barra no-imprimir"><input class="entrada-buscar" type="search" placeholder="BUSCAR..."></div>' +
+            '<div id="zona-lista"></div></div>';
+
+        const zonaForm = cont.querySelector("#zona-form");
+        const zonaLista = cont.querySelector("#zona-lista");
+        const buscador = cont.querySelector(".entrada-buscar");
+        let subs = [], todos = [];
+
+        function opcionesSub() {
+          return '<option value="">— SIN GRUPO —</option>' + subs.map(function (s) {
+            return '<option value="' + s.id + '">' + U.esc(U.UP(s.nombre)) + "</option>";
+          }).join("");
+        }
+
+        function pintarFormulario() {
+          zonaForm.innerHTML =
+            '<div class="formulario">' +
+              '<div class="dos-col">' +
+                '<div class="campo"><label>ROL</label><select id="f-rol">' +
+                  '<option value="SUBCOORDINADOR">4 · SUB-COORDINADOR</option>' +
+                  '<option value="LIDER">5 · LÍDER</option>' +
+                "</select></div>" +
+                '<div class="campo"><label>NOMBRE COMPLETO</label><input id="f-nombre" type="text"></div>' +
+              "</div>" +
+              '<div class="dos-col">' +
+                '<div class="campo"><label>USUARIO / CÉDULA</label><input id="f-usuario" type="text"></div>' +
+                '<div class="campo"><label>TELÉFONO</label><input id="f-telefono" type="tel"></div>' +
+              "</div>" +
+              '<div class="campo"><label>DIRECCIÓN</label><input id="f-direccion" type="text"></div>' +
+              '<div class="campo" id="c-sub"><label>GRUPO DEL SUB-COORDINADOR</label><select id="f-sub">' + opcionesSub() + "</select></div>" +
+              '<div class="dos-col">' +
+                '<div class="campo"><label>CONTRASEÑA</label><input id="f-pass" type="password"></div>' +
+                '<div class="campo"><label>CONFIRMAR CONTRASEÑA</label><input id="f-pass2" type="password"></div>' +
+              "</div>" +
+              '<div id="f-error"></div>' +
+              '<div class="acciones-form"><button class="btn btn-exito" id="btn-guardar">CREAR CUENTA</button>' +
+              '<button class="btn btn-suave" id="btn-limpiar">LIMPIAR</button></div>' +
+            "</div>";
+
+          const selRol = zonaForm.querySelector("#f-rol");
+          const cSub = zonaForm.querySelector("#c-sub");
+          selRol.addEventListener("change", function () {
+            cSub.style.display = selRol.value === "LIDER" ? "" : "none";
+          });
+          cSub.style.display = "none";
+
+          zonaForm.querySelector("#btn-limpiar").addEventListener("click", pintarFormulario);
+
+          zonaForm.querySelector("#btn-guardar").addEventListener("click", async function () {
+            const errBox = zonaForm.querySelector("#f-error");
+            errBox.innerHTML = "";
+            UI.cargando(true);
+            try {
+              await Auth.crearUsuario({
+                rol: selRol.value,
+                nombre: zonaForm.querySelector("#f-nombre").value,
+                usuario: zonaForm.querySelector("#f-usuario").value,
+                telefono: zonaForm.querySelector("#f-telefono").value,
+                direccion: zonaForm.querySelector("#f-direccion").value,
+                barrio: App.perfil.barrio,
+                coordinadorId: App.perfil.id,
+                subcoordinadorId: selRol.value === "LIDER" ? (zonaForm.querySelector("#f-sub").value || null) : null,
+                password: zonaForm.querySelector("#f-pass").value,
+                confirmar: zonaForm.querySelector("#f-pass2").value
+              });
+              UI.toast("CUENTA CREADA EXITOSAMENTE");
+              const equipo = await FS.equipoDelCoordinador(App.perfil.id);
+              subs = equipo.subcoordinadores;
+              pintarFormulario();
+              await cargarLista();
+            } catch (e) {
+              errBox.innerHTML = UI.alerta("error", e.message);
+            }
+            UI.cargando(false);
+          });
+        }
+
+        async function cargarLista() {
+          try {
+            const equipo = await FS.equipoDelCoordinador(App.perfil.id);
+            subs = equipo.subcoordinadores;
+            todos = subs.concat(equipo.lideres);
+            pintarLista();
+          } catch (e) { zonaLista.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        function pintarLista() {
+          const q = U.UP(buscador.value);
+          const lista = todos.filter(function (u) {
+            return !q || U.contiene(U.unir([u.nombre, u.usuario, u.rol]), q);
+          });
+          zonaLista.innerHTML = UI.tabla(
+            ["NOMBRE", "ROL", "USUARIO / CÉDULA", "TELÉFONO", "GRUPO", "ESTADO"],
+            lista.map(function (u) {
+              const sub = u.rol === "LIDER" ? subs.find(function (s) { return s.id === u.subcoordinadorId; }) : null;
+              return [
+                U.esc(U.UP(u.nombre)),
+                UI.sello(u.rol === "LIDER" ? "LÍDER" : "SUB-COORDINADOR", { "LÍDER": "gris", "SUB-COORDINADOR": "azul" }),
+                U.esc(u.usuario),
+                U.esc(u.telefono || "—"),
+                U.esc(U.UP(sub ? sub.nombre : (u.rol === "LIDER" ? "SIN ASIGNAR" : "—"))),
+                UI.selloEstado(u.estado)
+              ];
+            })
+          );
+        }
+
+        buscador.oninput = pintarLista;
+
+        UI.cargando(true);
+        await cargarLista();
+        UI.cargando(false);
+        pintarFormulario();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 4 — UBICAR / MOVER LÍDERES
+     ================================================================== */
+  function vistaUbicar() {
+    return {
+      etiqueta: "UBICAR / MOVER LÍDER", icono: "🔁",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("UBICAR LÍDERES Y CAMBIAR ESTADOS", "COLOQUE CADA LÍDER EN EL GRUPO DE UN SUB-COORDINADOR O CAMBIE SU ESTADO.") +
+          '<div class="tarjeta"><h3>MOVER LÍDER DE GRUPO</h3><div id="zona-form"></div></div>' +
+          '<div class="tarjeta"><h3>ESTADOS DEL EQUIPO</h3>' +
+            '<div class="barra no-imprimir"><input class="entrada-buscar" type="search" placeholder="BUSCAR..."></div>' +
+            '<div id="zona-est"></div></div>';
+
+        const zonaForm = cont.querySelector("#zona-form");
+        const zonaEst = cont.querySelector("#zona-est");
+        const buscador = cont.querySelector(".entrada-buscar");
+        let subs = [], lideres = [];
+
+        async function cargar() {
+          UI.cargando(true);
+          try {
+            const equipo = await FS.equipoDelCoordinador(App.perfil.id);
+            subs = equipo.subcoordinadores;
+            lideres = equipo.lideres;
+            pintarFormulario();
+            pintarEstados();
+          } catch (e) { zonaForm.innerHTML = UI.alerta("error", e.message); }
+          UI.cargando(false);
+        }
+
+        function pintarFormulario() {
+          zonaForm.innerHTML =
+            '<div class="formulario">' +
+              '<div class="dos-col">' +
+                '<div class="campo"><label>LÍDER</label><select id="u-lider">' +
+                  '<option value="">— SELECCIONE —</option>' +
+                  lideres.map(function (l) {
+                    return '<option value="' + l.id + '">' + U.esc(U.UP(l.nombre)) + "</option>";
+                  }).join("") + "</select></div>" +
+                '<div class="campo"><label>SUB-COORDINADOR DESTINO</label><select id="u-sub">' +
+                  '<option value="">— SELECCIONE —</option>' +
+                  subs.map(function (s) {
+                    return '<option value="' + s.id + '">' + U.esc(U.UP(s.nombre)) + "</option>";
+                  }).join("") + "</select></div>" +
+              "</div>" +
+              '<div id="u-info"></div>' +
+              '<div class="acciones-form"><button class="btn btn-primario" id="u-guardar">GUARDAR UBICACIÓN</button></div>' +
+            "</div>";
+
+          const selL = zonaForm.querySelector("#u-lider");
+          const info = zonaForm.querySelector("#u-info");
+
+          selL.addEventListener("change", function () {
+            const l = lideres.find(function (x) { return x.id === selL.value; });
+            if (!l) { info.innerHTML = ""; return; }
+            const sub = subs.find(function (s) { return s.id === l.subcoordinadorId; });
+            info.innerHTML = UI.alerta("info",
+              "GRUPO ACTUAL: " + (sub ? U.UP(sub.nombre) : "SIN ASIGNAR") +
+              " · ESTADO: " + U.UP(l.estado));
+            zonaForm.querySelector("#u-sub").value = l.subcoordinadorId || "";
+          });
+
+          zonaForm.querySelector("#u-guardar").addEventListener("click", async function () {
+            if (!selL.value || !zonaForm.querySelector("#u-sub").value) {
+              UI.toast("SELECCIONE EL LÍDER Y EL SUB-COORDINADOR", "error"); return;
+            }
+            const sub = subs.find(function (s) { return s.id === zonaForm.querySelector("#u-sub").value; });
+            UI.cargando(true);
+            try {
+              await FS.actualizar("usuarios", selL.value, {
+                subcoordinadorId: sub.id, coordinadorId: App.perfil.id,
+                barrio: U.UP(sub.barrio || App.perfil.barrio), actualizadoEn: U.ahora()
+              });
+              UI.toast("LÍDER MOVIDO DE GRUPO");
+              await cargar();
+            } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+            UI.cargando(false);
+          });
+        }
+
+        function pintarEstados() {
+          function pintarLista() {
+            const q = U.UP(buscador.value);
+            const lista = subs.concat(lideres).filter(function (u) {
+              return !q || U.contiene(U.unir([u.nombre, u.usuario, u.rol]), q);
+            });
+            zonaEst.innerHTML = UI.tabla(["NOMBRE", "ROL", "USUARIO", "ESTADO", "CAMBIAR ESTADO"],
+              lista.map(function (u) {
+                return [
+                  U.esc(U.UP(u.nombre)),
+                  UI.sello(u.rol === "LIDER" ? "LÍDER" : "SUB-COORDINADOR", { "LÍDER": "gris", "SUB-COORDINADOR": "azul" }),
+                  U.esc(u.usuario),
+                  UI.selloEstado(u.estado),
+                  '<div class="grp-acciones">' +
+                    '<button class="btn btn-mini btn-exito" data-est="ACTIVO" data-id="' + u.id + '">ACTIVAR</button>' +
+                    '<button class="btn btn-mini btn-peligro" data-del="' + u.id + '" data-rol="' + u.rol + '" data-usuario="' + U.esc(u.usuario) + '" data-nombre="' + U.esc(U.UP(u.nombre)) + '">ELIMINAR</button>' +
+                    
+                  "</div>"
+                ];
+              })
+            );
+            zonaEst.querySelectorAll("[data-est]").forEach(function (b) {
+              b.addEventListener("click", async function () {
+                const ok = await UI.confirmar("¿DESEA CAMBIAR EL ESTADO DE ESTA CUENTA?");
+                if (!ok) return;
+                UI.cargando(true);
+                try {
+                  await FS.actualizar("usuarios", b.dataset.id, { estado: b.dataset.est, actualizadoEn: U.ahora() });
+                  UI.toast("ESTADO ACTUALIZADO");
+                  await cargar();
+                } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+                UI.cargando(false);
+              });
+            });
+          }
+          zonaEst.querySelectorAll("[data-del]").forEach(function (b) {
+            b.addEventListener("click", async function () {
+              const id = b.dataset.del;
+              const rol = b.dataset.rol;
+              const nombre = b.dataset.nombre;
+              const usuario = b.dataset.usuario;
+
+              let dependientes = 0, detalle = "";
+              if (rol === "SUBCOORDINADOR") {
+                const lids = (await FS.usuarios()).filter(function (u) { return u.subcoordinadorId === id; });
+                dependientes = lids.length;
+                detalle = lids.length + " LÍDER(ES)";
+              }
+
+              if (dependientes > 0) {
+                UI.toast("NO SE PUEDE ELIMINAR: TIENE " + detalle + " ASIGNADOS. MUÉVALOS PRIMERO (UBICAR / MOVER LÍDER).", "error");
+                return;
+              }
+
+              const ok = await UI.confirmar("¿ELIMINAR LA CUENTA DE " + nombre + " (" + usuario + ")? ESTA ACCIÓN NO SE PUEDE DESHACER.");
+              if (!ok) return;
+              UI.cargando(true);
+              try {
+                await FS.borrar("usuarios", id);
+                UI.toast("CUENTA ELIMINADA EXITOSAMENTE", "ok");
+                await cargar();
+              } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+              UI.cargando(false);
+            });
+          });
+
+          buscador.oninput = pintarLista;
+          pintarLista();
+        }
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 5 — DIRECTRICES A SUB-COORDINADORES
+     ================================================================== */
+  function vistaDirectrices() {
+    return {
+      etiqueta: "DIRECTRICES A SUBS", icono: "📌",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("DIRECTRICES DE TRABAJO", "ENVÍE INSTRUCCIONES DE TRABAJO A SUS SUB-COORDINADORES.") +
+          '<div class="tarjeta"><h3>NUEVA DIRECTRIZ</h3>' +
+            '<div class="campo"><label>TEXTO DE LA DIRECTRIZ</label><textarea id="d-texto" rows="4" placeholder="ESCRIBA LA INSTRUCCIÓN..."></textarea></div>' +
+            '<div id="d-error"></div>' +
+            '<div class="acciones-form"><button class="btn btn-primario" id="d-enviar">ENVIAR A MIS SUB-COORDINADORES</button></div>' +
+          "</div>" +
+          '<div class="tarjeta"><h3>ENVÍOS REALIZADOS</h3><div id="zona-lista"></div></div>';
+
+        const zonaLista = cont.querySelector("#zona-lista");
+
+        async function pintarLista() {
+          try {
+            const enviados = await FS.mensajesEnviados(App.perfil.id);
+            const subs = enviados.filter(function (m) { return m.alcance === "trabajo_sub"; });
+            zonaLista.innerHTML = subs.length
+              ? subs.map(function (m) {
+                  return '<div class="mensaje"><div class="cab"><span>PARA: ' +
+                    U.esc(U.UP(m.barrio)) + " · SUB-COORDINADORES</span><span>" +
+                    U.esc(U.fecha(m.fecha)) + "</span></div><div class=\"cuerpo\">" +
+                    U.esc(U.UP(m.texto)) + "</div></div>";
+                }).join("")
+              : '<div class="mensaje vacio-m">AÚN NO HA ENVIADO DIRECTRICES</div>';
+          } catch (e) { zonaLista.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        cont.querySelector("#d-enviar").addEventListener("click", async function () {
+          const texto = U.UP(cont.querySelector("#d-texto").value);
+          const errBox = cont.querySelector("#d-error");
+          errBox.innerHTML = "";
+          if (!U.requerido(texto)) { errBox.innerHTML = UI.alerta("error", "LA DIRECTRIZ ES OBLIGATORIA"); return; }
+          UI.cargando(true);
+          try {
+            await FS.crear("mensajes", {
+              alcance: "trabajo_sub", deId: App.perfil.id, deNombre: App.perfil.nombre,
+              paraCoordinadorId: App.perfil.id, paraSubId: null,
+              barrio: U.UP(App.perfil.barrio), texto: texto,
+              fecha: U.ahora(), fechaMs: U.ahoraMs()
+            });
+            UI.toast("DIRECTRIZ ENVIADA");
+            cont.querySelector("#d-texto").value = "";
+            await pintarLista();
+          } catch (e) { errBox.innerHTML = UI.alerta("error", e.message); }
+          UI.cargando(false);
+        });
+
+        await pintarLista();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 6 — RECAUDACIÓN DE DATOS (CRUD PROPIO)
+     ================================================================== */
+  function vistaRecaudacion() {
+    return {
+      etiqueta: "RECAUDAR DATOS", icono: "📝",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("MÓDULO DE RECAUDACIÓN DE DATOS", "CREE Y EDITE SUS PROPIOS REGISTROS CIUDADANOS.") +
+          '<div class="tarjeta"><h3 id="tit-form">NUEVO REGISTRO</h3><div id="zona-form">' +
+            Comun.formRecaudacion() +
+            '<div class="acciones-form"><button class="btn btn-exito" id="rc-guardar">GUARDAR REGISTRO</button>' +
+            '<button class="btn btn-suave" id="rc-nuevo">NUEVO</button></div></div></div>' +
+          '<div class="tarjeta"><h3>MIS REGISTROS</h3>' +
+            '<div class="barra no-imprimir"><input class="entrada-buscar" type="search" placeholder="BUSCAR..."></div>' +
+            '<div id="zona-lista"></div></div>';
+
+        const zonaForm = cont.querySelector("#zona-form");
+        const zonaLista = cont.querySelector("#zona-lista");
+        const buscador = cont.querySelector(".entrada-buscar");
+        const titForm = cont.querySelector("#tit-form");
+        let editando = null;
+        let propios = [];
+
+        function limpiar() {
+          editando = null;
+          titForm.textContent = "NUEVO REGISTRO";
+          zonaForm.innerHTML = Comun.formRecaudacion() + accionForm();
+          bindForm();
+        }
+        function accionForm() {
+          return '<div class="acciones-form"><button class="btn btn-exito" id="rc-guardar">GUARDAR REGISTRO</button>' +
+                 '<button class="btn btn-suave" id="rc-nuevo">NUEVO</button></div>';
+        }
+        function bindForm() {
+          zonaForm.querySelector("#rc-guardar").addEventListener("click", guardar);
+          zonaForm.querySelector("#rc-nuevo").addEventListener("click", limpiar);
+        }
+
+        async function cargar() {
+          UI.cargando(true);
+          try { propios = await FS.recaudacionesPropias(App.perfil.id); pintarLista(); }
+          catch (e) { zonaLista.innerHTML = UI.alerta("error", e.message); }
+          UI.cargando(false);
+        }
+
+        function pintarLista() {
+          const q = U.UP(buscador.value);
+          const lista = propios.filter(function (r) {
+            return !q || U.contiene(U.unir([r.nombres, r.cedula, r.telefono, r.direccion, r.solicitud]), q);
+          });
+          zonaLista.innerHTML = UI.tabla(Comun.columnasRecaudacion,
+            lista.map(function (r) { return Comun.filaRecaudacion(r, true); }));
+
+          zonaLista.querySelectorAll("[data-edit]").forEach(function (b) {
+            b.addEventListener("click", function () {
+              const r = propios.find(function (x) { return x.id === b.dataset.edit; });
+              if (!r) return;
+              editando = r.id;
+              titForm.textContent = "EDITAR REGISTRO";
+              zonaForm.innerHTML = Comun.formRecaudacion(r) + accionForm();
+              bindForm();
+              zonaForm.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+          });
+          zonaLista.querySelectorAll("[data-del]").forEach(function (b) {
+            b.addEventListener("click", async function () {
+              const ok = await UI.confirmar("¿DESEA BORRAR ESTE REGISTRO? ESTA ACCIÓN NO SE PUEDE DESHACER.");
+              if (!ok) return;
+              UI.cargando(true);
+              try {
+                await FS.borrar("recaudaciones", b.dataset.del);
+                UI.toast("REGISTRO BORRADO");
+                await cargar();
+              } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+              UI.cargando(false);
+            });
+          });
+        }
+
+        async function guardar() {
+          const errBox = zonaForm.querySelector("#rc-error");
+          errBox.innerHTML = "";
+          const datos = Comun.leerRecaudacion(zonaForm);
+          const error = Comun.validarRecaudacion(datos);
+          if (error) { errBox.innerHTML = UI.alerta("error", error); return; }
+          UI.cargando(true);
+          try {
+            await Comun.guardarRecaudacion(datos, editando, App.perfil);
+            UI.toast(editando ? "REGISTRO ACTUALIZADO" : "REGISTRO GUARDADO");
+            limpiar();
+            await cargar();
+          } catch (e) { errBox.innerHTML = UI.alerta("error", e.message); }
+          UI.cargando(false);
+        }
+
+        buscador.oninput = pintarLista;
+        bindForm();
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 7 — TABLA CONSOLIDADA DE RECAUDACIÓN
+     ================================================================== */
+  function vistaConsolidadoRecaudacion() {
+    return {
+      etiqueta: "RECAUDACIÓN CONSOLIDADA", icono: "📊",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("TABLA CONSOLIDADA DE RECAUDACIÓN", "TODA LA INFORMACIÓN RECAUDADA POR SUS LÍDERES, SUB-COORDINADORES Y POR USTED.") +
+          UI.barra(
+            '<input class="entrada-buscar" type="search" placeholder="BUSCAR NOMBRE, CÉDULA, DIRECCIÓN, SOLICITUD...">' +
+            '<button class="btn btn-suave" data-t="csv">EXPORTAR CSV</button>' +
+            '<button class="btn btn-suave" data-t="print">IMPRIMIR</button>              <button class="btn btn-suave" data-t="pdf">DESCARGAR PDF</button>' +
+            '<button class="btn btn-primario" data-t="ref">ACTUALIZAR</button>'
+          ) + '<div id="zona"></div>';
+
+        const zona = cont.querySelector("#zona");
+        const barra = cont.querySelector(".barra");
+        const buscador = barra.querySelector(".entrada-buscar");
+        let todos = [];
+
+        async function cargar() {
+          zona.innerHTML = UI.cargandoTabla();
+          try { todos = await FS.recaudacionesDelCoordinador(App.perfil.id); pintar(); }
+          catch (e) { zona.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        function filtrados() {
+          const q = U.UP(buscador.value);
+          if (!q) return todos;
+          return todos.filter(function (r) {
+            return U.contiene(U.unir([r.nombres, r.cedula, r.telefono, r.direccion, r.solicitud, r.creadoPorNombre]), q);
+          });
+        }
+
+        function pintar() {
+          const lista = filtrados();
+          const porRol = {};
+          todos.forEach(function (r) { porRol[r.rolCreador || "—"] = (porRol[r.rolCreador || "—"] || 0) + 1; });
+
+          zona.innerHTML =
+            UI.resumen(Object.keys(porRol).map(function (k) {
+              return { valor: porRol[k], etiqueta: "POR " + k };
+            }).concat([{ valor: todos.length, etiqueta: "TOTAL REGISTROS", color: "verde" }])) +
+            UI.tabla(Comun.columnasRecaudacion,
+              lista.map(function (r) { return Comun.filaRecaudacion(r, r.creadoPorId === App.perfil.id); }));
+        }
+
+        Comun.herramientas(barra, zona, {
+          recargar: cargar, pintar: pintar, filtrados: filtrados,
+          tituloCSV: "Recaudacion_Coordinador",
+          encabezadosCSV: ["NOMBRES", "CEDULA", "TELEFONO", "DIRECCION", "SOLICITUD", "REGISTRO", "ROL", "FECHA"],
+          filaCSV: function (r) {
+            return [r.nombres, r.cedula, r.telefono, r.direccion, r.solicitud, r.creadoPorNombre, r.rolCreador, r.fecha];
+          }
+        });
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 8 — QUEJAS Y SOLICITUDES RECIBIDAS
+     ================================================================== */
+  function vistaQuejas() {
+    return {
+      etiqueta: "QUEJAS RECIBIDAS", icono: "⚠️",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("QUEJAS Y SOLICITUDES RECIBIDAS", "REPORTES DE SUS SUB-COORDINADORES Y LÍDERES.") +
+          UI.barra(
+            '<input class="entrada-buscar" type="search" placeholder="BUSCAR...">' +
+            '<button class="btn btn-suave" data-t="csv">EXPORTAR CSV</button>' +
+            '<button class="btn btn-suave" data-t="print">IMPRIMIR</button>              <button class="btn btn-suave" data-t="pdf">DESCARGAR PDF</button>' +
+            '<button class="btn btn-primario" data-t="ref">ACTUALIZAR</button>'
+          ) + '<div id="zona"></div>';
+
+        const zona = cont.querySelector("#zona");
+        const barra = cont.querySelector(".barra");
+        const buscador = barra.querySelector(".entrada-buscar");
+        let todos = [];
+
+        async function cargar() {
+          zona.innerHTML = UI.cargandoTabla();
+          try { todos = await FS.quejasDelCoordinador(App.perfil.id); pintar(); }
+          catch (e) { zona.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        function filtrados() {
+          const q = U.UP(buscador.value);
+          if (!q) return todos;
+          return todos.filter(function (x) {
+            return U.contiene(U.unir([x.tipo, x.mensaje, x.creadoPorNombre, x.rolCreador]), q);
+          });
+        }
+
+        function pintar() {
+          zona.innerHTML = UI.tabla(
+            ["FECHA", "TIPO", "MENSAJE", "DE (NOMBRE)", "ROL"],
+            filtrados().map(function (x) {
+              return [
+                U.esc(U.fecha(x.fecha)),
+                UI.sello(x.tipo, { QUEJA: "rojo", SOLICITUD: "naranja", "REPORTE OPERATIVO": "azul", "OBSERVACIÓN": "gris" }),
+                U.esc(U.UP(x.mensaje)),
+                U.esc(U.UP(x.creadoPorNombre || "—")),
+                U.esc(U.UP(x.rolCreador || "—"))
+              ];
+            })
+          );
+        }
+
+        Comun.herramientas(barra, zona, {
+          recargar: cargar, pintar: pintar, filtrados: filtrados,
+          tituloCSV: "Quejas_Coordinador",
+          encabezadosCSV: ["FECHA", "TIPO", "MENSAJE", "DE", "ROL"],
+          filaCSV: function (x) { return [x.fecha, x.tipo, x.mensaje, x.creadoPorNombre, x.rolCreador]; }
+        });
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 9 — ESCALAMIENTO AL ZONAL (CON ADJUNTOS)
+     ================================================================== */
+  function vistaEscalamiento() {
+    return {
+      etiqueta: "ESCALAMIENTO AL ZONAL", icono: "📤",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("REDACTAR REPORTE, QUEJA O SOLICITUD AL ZONAL", "ADJUNTE IMÁGENES, AUDIO Y DOCUMENTOS (FIREBASE STORAGE).") +
+          '<div class="tarjeta"><h3>NUEVO ESCALAMIENTO</h3>' +
+            '<div class="formulario">' +
+              '<div class="campo"><label>ASUNTO</label><input id="e-asunto" type="text"></div>' +
+              '<div class="campo"><label>MENSAJE</label><textarea id="e-mensaje" rows="5" placeholder="DESCRIBA EL REPORTE..."></textarea></div>' +
+              '<div class="archivos"><label style="font-weight:700;font-size:12px;color:#5f6b7a">ARCHIVOS ADJUNTOS (IMAGEN, AUDIO, PDF, DOCX)</label>' +
+                '<input id="e-archivos" type="file" multiple accept="image/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"></div>' +
+              '<div id="e-error"></div>' +
+              '<div class="acciones-form"><button class="btn btn-primario" id="e-enviar">ENVIAR AL ZONAL</button></div>' +
+            "</div>" +
+          "</div>" +
+          '<div class="tarjeta"><h3>MIS ESCALAMIENTOS ENVIADOS</h3><div id="zona-lista"></div></div>';
+
+        const zonaLista = cont.querySelector("#zona-lista");
+
+        async function pintarLista() {
+          try {
+            const todos = await FS.escalamientos();
+            const mios = todos.filter(function (e) { return e.coordinadorId === App.perfil.id; });
+            zonaLista.innerHTML = mios.length
+              ? mios.map(function (e) {
+                  const adj = (e.adjuntos || []).length
+                    ? '<div class="lista-adjuntos">' + e.adjuntos.map(function (a) {
+                        return '<a class="adjunto" href="' + U.esc(a.url) + '" target="_blank" rel="noopener">📎 ' +
+                               U.esc(U.UP(a.nombre)) + "</a>";
+                      }).join("") + "</div>"
+                    : '<p class="menor">SIN ADJUNTOS.</p>';
+                  return '<div class="mensaje"><div class="cab"><span><strong>' +
+                    U.esc(U.UP(e.asunto)) + "</strong></span><span>" + U.esc(U.fecha(e.fecha)) +
+                    "</span></div><div class=\"cuerpo\">" + U.esc(U.UP(e.mensaje)) + "</div>" + adj + "</div>";
+                }).join("")
+              : '<div class="mensaje vacio-m">AÚN NO HA ENVIADO ESCALAMIENTOS</div>';
+          } catch (e) { zonaLista.innerHTML = UI.alerta("error", e.message); }
+        }
+
+        cont.querySelector("#e-enviar").addEventListener("click", async function () {
+          const errBox = cont.querySelector("#e-error");
+          errBox.innerHTML = "";
+          const asunto = U.UP(cont.querySelector("#e-asunto").value);
+          const mensaje = U.UP(cont.querySelector("#e-mensaje").value);
+          const archivos = cont.querySelector("#e-archivos").files;
+
+          if (!U.requerido(asunto)) { errBox.innerHTML = UI.alerta("error", "EL ASUNTO ES OBLIGATORIO"); return; }
+          if (!U.requerido(mensaje)) { errBox.innerHTML = UI.alerta("error", "EL MENSAJE ES OBLIGATORIO"); return; }
+          if (!archivos.length) { errBox.innerHTML = UI.alerta("error", "DEBE ADJUNTAR AL MENOS UN ARCHIVO"); return; }
+
+          UI.cargando(true);
+          try {
+            const id = await FS.crear("escalamientosZonal", {
+              asunto: asunto, mensaje: mensaje, adjuntos: [],
+              coordinadorId: App.perfil.id, coordinadorNombre: App.perfil.nombre,
+              barrio: U.UP(App.perfil.barrio), fecha: U.ahora(), fechaMs: U.ahoraMs()
+            });
+            const adjuntos = await FS.subirAdjuntos(
+              U.UP(App.perfil.barrio), App.perfil.id, id, archivos);
+            await FS.actualizar("escalamientosZonal", id, { adjuntos: adjuntos });
+            UI.toast("ESCALAMIENTO ENVIADO CON " + adjuntos.length + " ADJUNTO(S)");
+            cont.querySelector("#e-asunto").value = "";
+            cont.querySelector("#e-mensaje").value = "";
+            cont.querySelector("#e-archivos").value = "";
+            await pintarLista();
+          } catch (e) { errBox.innerHTML = UI.alerta("error", "ERROR: " + e.message); }
+          UI.cargando(false);
+        });
+
+        await pintarLista();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 10 — MENSAJERÍA
+     ================================================================== */
+  function vistaMensajeria() {
+    return {
+      etiqueta: "MENSAJERÍA", icono: "💬",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("MENSAJERÍA DEL COORDINADOR", "RECIBA INSTRUCCIONES DEL ZONAL Y ENVÍE MENSAJES A SUS SUB-COORDINADORES.") +
+          '<div class="tarjeta"><h3>ENVIAR MENSAJE</h3>' +
+            '<div class="campo"><label>DESTINATARIO</label><select id="m-dest">' +
+              '<option value="zonal">ZONAL (ESCALAMIENTO CON ADJUNTOS)</option>' +
+              '<option value="publicidad">PUBLICIDAD (2A)</option>' +
+              '<option value="compras">COMPRAS (2B)</option>' +
+              '<option value="subs">SUB-COORDINADORES (DIRECTRIZ)</option>' +
+              '<option value="lideres">LÍDERES DEL BARRIO</option>' +
+              '<option value="barrio">BARRIO GENERAL</option>' +
+              '<option value="persona">ENVIAR A PERSONA ESPECÍFICA</option>' +
+            '</select></div>' +
+            '<div id="persona-busqueda" style="display:none; margin-top:8px">' +
+              '<div class="campo"><label>BUSCAR USUARIO / CÉDULA / NOMBRE</label>' +
+                '<input id="m-buscar-usuario" type="text" placeholder="Cédula, nombre o usuario..." style="width:100%">' +
+                '<div id="m-resultados-busqueda"></div>' +
+              '</div>' +
+              '<input type="hidden" id="m-persona-id" value="">' +
+            '</div>' +
+            '<div class="campo"><label>ASUNTO (SOLO ESCALAMIENTO)</label><input id="m-asunto" type="text" placeholder="ASUNTO DEL REPORTE..."></div>' +
+            '<div class="campo"><label>TEXTO</label><textarea id="m-texto" rows="4" placeholder="ESCRIBA EL MENSAJE..."></textarea></div>' +
+            '<div class="campo" id="m-archivos-campo"><label>ARCHIVOS ADJUNTOS (SOLO ESCALAMIENTO)</label>' +
+              '<input id="m-archivos" type="file" multiple accept="image/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx"></div>' +
+            '<div id="m-error"></div>' +
+            '<div class="acciones-form"><button class="btn btn-primario" id="m-enviar">ENVIAR</button></div></div>' +
+          '<div class="tarjeta"><h3>MENSAJES RECIBIDOS</h3><div id="zona-rec"></div></div>' +
+          '<div class="tarjeta"><h3>MENSAJES ENVIADOS</h3>' +
+            '<p class="menor">LOS MENSAJES ENVIADOS NO SE MUESTRAN POR DEFECTO.</p>' +
+            '<div class="acciones-form"><button class="btn btn-primario" id="btn-ver-enviados-coord">VER MENSAJES ENVIADOS</button></div>' +
+            '<div id="zona-env" style="display:none"></div></div>';
+
+        const zonaRec = cont.querySelector("#zona-rec");
+        const zonaEnv = cont.querySelector("#zona-env");
+
+        setTimeout(function () {
+          const btn = cont.querySelector("#btn-ver-enviados-coord");
+          if (btn) btn.addEventListener("click", function () {
+            App.abrirMensajesEnviadosCoord();
+          });
+        }, 0);
+
+        const btnArch = cont.querySelector("#btn-arch-env");
+        if (btnArch) btnArch.addEventListener("click", function () {
+          mostrarArchivadosEnv = !mostrarArchivadosEnv;
+          btnArch.textContent = mostrarArchivadosEnv ? "VER ACTIVOS" : "VER ARCHIVADOS";
+          pintar();
+        });
+        async function pintar() {
+          UI.cargando(true);
+          try {
+            const res = await Promise.all([
+              FS.bandejaMensajes(App.perfil), FS.mensajesEnviados(App.perfil.id)
+            ]);
+            const recibidos = res[0].filter(function (m) { return !m.archivado; });
+
+            zonaRec.innerHTML = recibidos.length
+              ? recibidos.map(function (m) {
+                  const al = m.alcance === "directo_coordinador" ? "DIRECTO" : "GENERAL DEL BARRIO";
+                  return '<div class="mensaje"><div class="cab"><span><span class="alcance">' + al +
+                    "</span> DE: " + U.esc(U.UP(m.deNombre)) + "</span><span>" +
+                    U.esc(U.fecha(m.fecha)) + (m.editadoEn ? " (EDITADO)" : "") + "</span></div><div class=\"cuerpo\">" +
+                    U.esc(U.UP(m.texto)) + "</div>" +
+                    '<div class="grp-acciones no-imprimir" style="margin-top:6px">' +
+                      '<button class="btn btn-mini btn-suave" data-arch="' + m.id + '">ARCHIVAR</button>' +
+                    '</div></div>';
+                }).join("")
+              : '<div class="mensaje vacio-m">NO TIENE MENSAJES NUEVOS</div>';
+
+            // wiring archivar (recibidos)
+            zonaRec.querySelectorAll("[data-arch]").forEach(function (b) {
+              b.addEventListener("click", async function () {
+                UI.cargando(true);
+                try {
+                  const todos = await FS.bandejaMensajes(App.perfil);
+                  const m = todos.find(function (x) { return x.id === b.dataset.arch; });
+                  await FS.actualizar("mensajes", b.dataset.arch, { archivado: !m.archivado, actualizadoEn: U.ahora() });
+                  UI.toast(m.archivado ? "MENSAJE RESTAURADO" : "MENSAJE ARCHIVADO");
+                  await pintar();
+                } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+                UI.cargando(false);
+              });
+            });
+          } catch (e) {
+            zonaRec.innerHTML = UI.alerta("error", e.message);
+          }
+          UI.cargando(false);
+        }
+
+        cont.querySelector("#m-enviar").addEventListener("click", async function () {
+          const errBox = cont.querySelector("#m-error");
+          errBox.innerHTML = "";
+          
+          // Obtener el destinatario seleccionado o buscado
+          let dest = cont.querySelector("#m-dest").value;
+          let destNombre = cont.querySelector("#m-dest").options[cont.querySelector("#m-dest").selectedIndex].text;
+          
+          // Si hay un ID de persona buscada (no es un rol estándar)
+          const personaId = cont.querySelector("#m-persona-id")?.value;
+          
+          const asunto = U.UP(cont.querySelector("#m-asunto").value);
+          const texto = U.UP(cont.querySelector("#m-texto").value);
+          
+          if (!U.requerido(texto)) { errBox.innerHTML = UI.alerta("error", "EL MENSAJE ES OBLIGATORIO"); return; }
+
+          UI.cargando(true);
+          try {
+            // Si hay una persona buscada por ID, enviarle mensaje directo
+            if (personaId && personaId !== "") {
+              const persona = await FS.usuariosPorRol("COORDINADOR"); // placeholder, buscar en todos
+              // Buscar en todos los usuarios
+              const todos = await FS.usuarios();
+              const personaEncontrada = todos.find(function (u) { return u.id === personaId || u.usuario === personaId || U.UP(u.nombre) === U.UP(personaId); });
+              
+              if (!personaEncontrada) { errBox.innerHTML = UI.alerta("error", "PERSONA NO ENCONTRADA"); UI.cargando(false); return; }
+              
+              // Determinar el rol de la persona para el alcance
+              let alcance = "directo_coordinador";
+              let paraRol = personaEncontrada.rol;
+              let paraCoordinadorId = null;
+              let barrio = U.UP(App.perfil.barrio);
+              
+              // Si es coordinador, usar directo_coordinador
+              if (paraRol === "COORDINADOR") {
+                paraCoordinadorId = personaEncontrada.id;
+                alcance = "directo_coordinador";
+                barrio = U.UP(personaEncontrada.barrio || App.perfil.barrio);
+              } else {
+                // Para otros roles, usar directo_rol
+                paraRol = paraRol || "COORDINADOR";
+                alcance = "directo_rol";
+              }
+              
+              await FS.crear("mensajes", {
+                alcance: alcance, deId: App.perfil.id, deNombre: App.perfil.nombre,
+                paraRol: paraRol, paraCoordinadorId: paraCoordinadorId,
+                barrio: barrio, texto: texto,
+                fecha: U.ahora(), fechaMs: U.ahoraMs()
+              });
+              UI.toast("MENSAJE ENVIADO A " + (personaEncontrada.nombre || personaEncontrada.usuario));
+            } else if (dest === "zonal") {
+              if (!U.requerido(asunto)) { errBox.innerHTML = UI.alerta("error", "EL ASUNTO ES OBLIGATORIO PARA ESCALAMIENTO"); UI.cargando(false); return; }
+              const archivos = cont.querySelector("#m-archivos").files;
+              if (!archivos.length) { errBox.innerHTML = UI.alerta("error", "DEBE ADJUNTAR AL MENOS UN ARCHIVO PARA ESCALAMIENTO"); UI.cargando(false); return; }
+              const id = await FS.crear("escalamientosZonal", {
+                asunto: asunto, mensaje: texto, adjuntos: [],
+                coordinadorId: App.perfil.id, coordinadorNombre: App.perfil.nombre,
+                barrio: U.UP(App.perfil.barrio), fecha: U.ahora(), fechaMs: U.ahoraMs()
+              });
+              const adjuntos = await FS.subirAdjuntos(U.UP(App.perfil.barrio), App.perfil.id, id, archivos);
+              await FS.actualizar("escalamientosZonal", id, { adjuntos: adjuntos });
+              UI.toast("ESCALAMIENTO ENVIADO CON " + adjuntos.length + " ADJUNTO(S)");
+            } else if (dest === "publicidad" || dest === "compras") {
+              const rolDest = dest === "publicidad" ? "PUBLICIDAD" : "COMPRAS";
+              await FS.crear("mensajes", {
+                alcance: "directo_rol", deId: App.perfil.id, deNombre: App.perfil.nombre,
+                paraRol: rolDest, barrio: U.UP(App.perfil.barrio), texto: texto,
+                fecha: U.ahora(), fechaMs: U.ahoraMs()
+              });
+              UI.toast("MENSAJE ENVIADO A " + rolDest);
+            } else {
+              let alcance = "trabajo_sub";
+              if (dest === "lideres" || dest === "barrio") alcance = "general_barrio";
+              await FS.crear("mensajes", {
+                alcance: alcance, deId: App.perfil.id, deNombre: App.perfil.nombre,
+                paraCoordinadorId: App.perfil.id, paraSubId: null,
+                barrio: U.UP(App.perfil.barrio), texto: texto,
+                fecha: U.ahora(), fechaMs: U.ahoraMs()
+              });
+              UI.toast("MENSAJE ENVIADO");
+            }
+            cont.querySelector("#m-texto").value = "";
+            cont.querySelector("#m-asunto").value = "";
+            cont.querySelector("#m-archivos").value = "";
+            await pintar();
+          } catch (e) { errBox.innerHTML = UI.alerta("error", e.message); }
+          UI.cargando(false);
+        });
+
+        await pintar();
+
+        // Lógica para búsqueda de persona y envío directo
+        const mDest = cont.querySelector("#m-dest");
+        const mBuscarUsuario = cont.querySelector("#m-buscar-usuario");
+        const mResultados = cont.querySelector("#m-resultados-busqueda");
+        const mPersonaId = cont.querySelector("#m-persona-id");
+
+        mDest.addEventListener("change", function () {
+          if (this.value === "persona") {
+            mBuscarUsuario.style.display = "block";
+            mPersonaId.value = "";
+            mResultados.innerHTML = "";
+            mDestNombre = "persona";
+          } else {
+            mBuscarUsuario.style.display = "none";
+            mDestNombre = this.options[this.selectedIndex].text;
+            mPersonaId.value = "";
+          }
+        });
+
+        mBuscarUsuario.addEventListener("input", async function () {
+          const termino = this.value.trim();
+          if (termino.length < 2) {
+            mResultados.innerHTML = "";
+            return;
+          }
+          UI.cargando(true);
+          try {
+            const todos = await FS.usuarios();
+            const resultados = todos.filter(function (u) {
+              return U.contiene(U.unir([u.usuario, u.nombre, u.cedula || u.id]), termino);
+            }).slice(0, 10); // Máximo 10 resultados
+            
+            if (!resultados.length) {
+              mResultados.innerHTML = '<div class="alerta info">No se encontraron usuarios con ese término</div>';
+            } else {
+              mResultados.innerHTML = resultados.map(function (u) {
+                return '<div class="mensaje pequeno" style="padding:8px; border-bottom:1px solid #ddd" data-id="' + u.id + '" data-usuario="' + u.usuario + '" data-nombre="' + U.esc(U.UP(u.nombre)) + '">' +
+                  '<strong>' + U.esc(U.UP(u.nombre)) + ' (' + U.esc(U.UP(u.usuario)) + ')</strong>' +
+                  '<span class="menor">Rol: ' + (u.rol || '—') + ', Barrio: ' + (u.barrio || '—') + '</span>' +
+                '</div>';
+              }).join("");
+            }
+          } catch (e) {
+            mResultados.innerHTML = '<div class="alerta error">Error al buscar: ' + e.message + '</div>';
+          } finally {
+            UI.cargando(false);
+          }
+        });
+
+        // Manejar clic en resultado de búsqueda
+        cont.querySelectorAll("#m-resultados-busqueda .mensaje").forEach(function (el) {
+          el.addEventListener("click", function () {
+            const id = this.dataset.id;
+            const nombre = this.dataset.nombre;
+            const usuario = this.dataset.usuario;
+            mPersonaId.value = id;
+            mBuscarUsuario.value = usuario + " (" + nombre + ")";
+            mResultados.innerHTML = "";
+          });
+        });
+
+  /* ==================================================================
+     REGISTRO DEL MÓDULO
+     ================================================================== */
+  /* ==================================================================
+      MENSAJES ENVIADOS (MODAL)
+      ================================================================== */
+  App.abrirMensajesEnviadosCoord = async function () {
+    let mostrarArchivados = false;
+    UI.abrirModal("MENSAJES ENVIADOS", '<div id="zm-enviados">CARGANDO...</div>', [{ texto: "CERRAR", clase: "btn-suave" }]);
+
+    async function render() {
+      const zona = document.getElementById("zm-enviados");
+      if (!zona) return;
+      UI.cargando(true);
+      try {
+        const todos = await FS.mensajesEnviados(App.perfil.id);
+        const enviadosAll = todos.filter(function (m) { return m.alcance === "trabajo_sub"; });
+        const enviados = enviadosAll.filter(function (m) { return !!m.archivado === mostrarArchivados; });
+        if (!enviadosAll.length) {
+          zona.innerHTML = '<div class="mensaje vacio-m">AÚN NO HA ENVIADO MENSAJES</div>';
+          return;
+        }
+        if (!enviados.length) {
+          zona.innerHTML = '<div class="mensaje vacio-m">' + (mostrarArchivados ? "NO HAY MENSAJES ARCHIVADOS" : "NO HAY MENSAJES ACTIVOS") + '</div>';
+          return;
+        }
+        zona.innerHTML =
+          '<div class="barra no-imprimir" style="margin-bottom:8px"><button class="btn btn-suave" id="zm-toggle">' + (mostrarArchivados ? "VER ACTIVOS" : "VER ARCHIVADOS") + '</button></div>' +
+          enviados.map(function (m) {
+            return '<div class="mensaje"><div class="cab"><span>PARA: SUB-COORDINADORES DE ' +
+              U.esc(U.UP(m.barrio)) + "</span><span>" + U.esc(U.fecha(m.fecha)) + (m.editadoEn ? " (EDITADO)" : "") + "</span></div>" +
+              '<div class="cuerpo">' + U.esc(U.UP(m.texto)) + "</div>" +
+              '<div class="grp-acciones no-imprimir" style="margin-top:6px">' +
+                '<button class="btn btn-mini btn-suave" data-arch="' + m.id + '">' + (m.archivado ? "DESHACER ARCHIVO" : "ARCHIVAR") + '</button>' +
+                '<button class="btn btn-mini btn-azul2" data-edit-msg="' + m.id + '">EDITAR</button>' +
+                '<button class="btn btn-mini btn-peligro" data-del-msg="' + m.id + '">ELIMINAR</button>' +
+              '</div></div>';
+          }).join("");
+
+        const btnToggle = zona.querySelector("#zm-toggle");
+        if (btnToggle) btnToggle.addEventListener("click", function () {
+          mostrarArchivados = !mostrarArchivados;
+          render();
+        });
+
+        zona.querySelectorAll("[data-arch]").forEach(function (b) {
+          b.addEventListener("click", async function () {
+            UI.cargando(true);
+            try {
+              const m = enviadosAll.find(function (x) { return x.id === b.dataset.arch; });
+              await FS.actualizar("mensajes", b.dataset.arch, { archivado: !m.archivado, actualizadoEn: U.ahora() });
+              UI.toast(m.archivado ? "MENSAJE RESTAURADO" : "MENSAJE ARCHIVADO");
+              await render();
+            } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+            UI.cargando(false);
+          });
+        });
+
+        zona.querySelectorAll("[data-edit-msg]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            const m = enviadosAll.find(function (x) { return x.id === b.dataset.editMsg; });
+            if (!m) return;
+            UI.abrirModal("EDITAR MENSAJE",
+              '<div class="formulario">' +
+                '<div class="campo"><label>TEXTO DEL MENSAJE</label><textarea id="em-texto" rows="4">' + U.esc(U.UP(m.texto)) + '</textarea></div>' +
+                '<div id="em-error"></div>' +
+              '</div>',
+              [
+                { texto: "CANCELAR", clase: "btn-suave" },
+                { texto: "GUARDAR", clase: "btn-primario", onClick: async function () {
+                    const errBox = document.getElementById("em-error");
+                    errBox.innerHTML = "";
+                    const nuevo = U.UP(document.getElementById("em-texto").value);
+                    if (!U.requerido(nuevo)) { errBox.innerHTML = UI.alerta("error", "EL MENSAJE ES OBLIGATORIO"); return false; }
+                    UI.cargando(true);
+                    try {
+                      await FS.actualizar("mensajes", m.id, { texto: nuevo, editadoEn: U.ahora(), actualizadoEn: U.ahora() });
+                      UI.toast("MENSAJE ACTUALIZADO");
+                      await render();
+                      return true;
+                    } catch (e) {
+                      errBox.innerHTML = UI.alerta("error", e.message);
+                      return false;
+                    } finally {
+                      UI.cargando(false);
+                    }
+                  }
+                }
+              ]
+            );
+          });
+        });
+
+        zona.querySelectorAll("[data-del-msg]").forEach(function (b) {
+          b.addEventListener("click", async function () {
+            const ok = await UI.confirmar("¿ELIMINAR ESTE MENSAJE? SE BORRARÁ PARA TODOS LOS DESTINATARIOS.");
+            if (!ok) return;
+            UI.cargando(true);
+            try {
+              await FS.borrar("mensajes", b.dataset.delMsg);
+              UI.toast("MENSAJE ELIMINADO");
+              await render();
+            } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+            UI.cargando(false);
+          });
+        });
+      } catch (e) {
+        zona.innerHTML = UI.alerta("error", e.message);
+      }
+      UI.cargando(false);
+    }
+
+    await render();
+  };
+
+  App.registrarRol("COORDINADOR", {
+    orden: ["aprobaciones", "equipo", "crear", "ubicar", "mensajeria",
+            "recaudacion", "consolidado", "quejas"],
+    vistas: {
+      aprobaciones: vistaAprobaciones(),
+      equipo: vistaEquipo(),
+      crear: vistaCrearUsuarios(),
+      ubicar: vistaUbicar(),
+      mensajeria: vistaMensajeria(),
+      recaudacion: vistaRecaudacion(),
+      consolidado: vistaConsolidadoRecaudacion(),
+      quejas: vistaQuejas()
+    }
+  });
+})();

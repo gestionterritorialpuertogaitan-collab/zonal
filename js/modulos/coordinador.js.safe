@@ -1,0 +1,445 @@
+/* ==================================================================
+     VISTA 4 — UBICAR / MOVER LÍDERES
+     ================================================================== */
+  function vistaMoverLider() {
+    return {
+      etiqueta: "UBICAR / MOVER LÍDER", icono: "🔁",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("UBICAR O MOVER UN LÍDER", "EL ZONAL PUEDE COLOCAR CUALQUIER LÍDER CON EL SUB-COORDINADOR CON EL QUE VA A TRABAJAR.") +
+          '<div class="tarjeta"><h3>MOVER LÍDER DE GRUPO</h3><div id="zona-form"></div></div>' +
+          '<div class="tarjeta"><h3>ESTADO DE CUENTA (CUALQUIER NIVEL)</h3><div id="zona-estado"></div></div>' +
+          '<!-- NUEVA SECCIÓN: MOVER COORDINADOR -->' +
+          '<div class="tarjeta"><h3>MOVER COORDINADOR</h3>' +
+          '<div class="formulario">' +
+          '<div class="campo"><label>COORDINADOR A MOVER</label><select id="mv-coord">' +
+          '<option value="">— SELECCIONE COORDINADOR —</option>' +
+          '</select></div>' +
+          '<div class="campo"><label>COORDINADOR DESTINO</label><select id="mv-coord-dest">' +
+          '<option value="">— SELECCIONE DESTINO —</option>' +
+          '</select></div>' +
+          '<div id="mv-alerta" style="margin-top:8px; font-size:12px; color:#c62828"></div>' +
+          '<button class="btn btn-suave" id="mv-check">VER DEPENDENCIAS</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+
+        const zonaForm = cont.querySelector("#zona-form");
+        const zonaEstado = cont.querySelector("#zona-estado");
+
+        let lideres = [], subs = [], coordinadores = [];
+
+        async function cargar() {
+          UI.cargando(true);
+          try {
+            const res = await Promise.all([
+              FS.usuariosPorRol("LIDER"), FS.usuariosPorRol("SUBCOORDINADOR"), FS.usuariosPorRol("COORDINADOR"), FS.usuarios()
+            ]);
+            lideres = res[0]; subs = res[1]; coordinadores = res[2];
+            pintarFormulario();
+            pintarEstado(res[3]);
+            pintarSelectCoord();
+          } catch (e) {
+            zonaForm.innerHTML = UI.alerta("error", e.message);
+          }
+          UI.cargando(false);
+        }
+
+        function pintarSelectCoord() {
+          const selCoord = zonaForm.querySelector("#mv-coord");
+          const selCoordDest = zonaForm.querySelector("#mv-coord-dest");
+          selCoord.innerHTML = '<option value="">— SELECCIONE COORDINADOR —</option>';
+          selCoordDest.innerHTML = '<option value="">— SELECCIONE DESTINO —</option>';
+          coordinadores.forEach(function (c) {
+            if (c.id !== App.perfil.id) {
+              selCoord.innerHTML += '<option value="' + c.id + '">' + U.esc(U.UP(c.nombre)) + " · " + U.esc(U.UP(c.barrio)) + '</option>';
+              selCoordDest.innerHTML += '<option value="' + c.id + '">' + U.esc(U.UP(c.nombre)) + " · " + U.esc(U.UP(c.barrio)) + '</option>';
+            }
+          });
+        }
+
+        // Event: cambiar coordinador origen
+        zonaForm.querySelector("#mv-coord").addEventListener("change", async function () {
+          const coordId = this.value;
+          if (!coordId) {
+            zonaForm.querySelector("#mv-coord-dest").disabled = true;
+            zonaForm.querySelector("#mv-alerta").innerHTML = "";
+            return;
+          }
+          zonaForm.querySelector("#mv-coord-dest").disabled = false;
+          // Verificar dependencias
+          const subs = (await FS.usuariosPorRol("SUBCOORDINADOR")).filter(function (u) { return u.coordinadorId === coordId; });
+          const lideresCoord = (await FS.usuariosPorRol("LIDER")).filter(function (u) { return u.coordinadorId === coordId; });
+          let alerta = "";
+          if (lideresCoord.length > 0 || subs.length > 0) {
+            alerta = "ADVERTENCIA: Este coordinador tiene " + lideresCoord.length + " líder(s) y " + subs.length + " sub-coordinador(es) dependientes.<br>";
+            alerta += "Al moverlo, estos quedaran sin asignación. ¿Desea continuar?";
+          } else {
+            alerta = "No tiene subordinados. Seguro que desea mover este coordinador?";
+          }
+          zonaForm.querySelector("#mv-alerta").innerHTML = '<span style="color:#c62828"><strong>' + alerta + '</strong></span>';
+        });
+
+        // Event: verificar dependencias botón
+        zonaForm.querySelector("#mv-check").addEventListener("click", async function () {
+          const coordId = zonaForm.querySelector("#mv-coord").value;
+          if (!coordId) return;
+          const subs = (await FS.usuariosPorRol("SUBCOORDINADOR")).filter(function (u) { return u.coordinadorId === coordId; });
+          const lideresCoord = (await FS.usuariosPorRol("LIDER")).filter(function (u) { return u.coordinadorId === coordId; });
+          const msg = "Líderes dependientes: " + lideresCoord.map(function (l) { return U.UP(l.nombre); }).join(", ") || "Ninguno" +
+            "\nSub-coordinadores dependientes: " + subs.map(function (s) { return U.UP(s.nombre); }).join(", ") || "Ninguno";
+          UI.toast(msg, "info");
+        });
+
+        // Event: guardar movimiento coordinador
+        zonaForm.querySelector("#m-guardar").addEventListener("click", async function () {
+          const selCoord = zonaForm.querySelector("#mv-coord");
+          const selCoordDest = zonaForm.querySelector("#mv-coord-dest");
+          if (!selCoord.value) { UI.toast("SELECCIONE EL COORDINADOR A MOVER", "error"); return; }
+          if (!selCoordDest.value) { UI.toast("SELECCIONE EL COORDINADOR DESTINO", "error"); return; }
+
+          // Verificar si el destino ya tiene coordinador (reemplazo)
+          const coordDest = coordinadores.find(function (c) { return c.id === selCoordDest.value; });
+          const tieneDestino = coordDest && coordDest.id !== selCoord.value;
+
+          UI.cargando(true);
+          try {
+            // Mover coordinador
+            await FS.actualizar("usuarios", selCoord.value, {
+              coordinadorId: selCoordDest.value === selCoord.value ? null : selCoordDest.value,
+              actualizadoEn: U.ahora()
+            });
+
+            // Si el destino ya tenía coordinador, mover sus subordinados también
+            if (tieneDestino) {
+              const subsDest = (await FS.usuariosPorRol("SUBCOORDINADOR")).filter(function (u) { return u.coordinadorId === selCoordDest.value; });
+              const lideresDest = (await FS.usuariosPorRol("LIDER")).filter(function (u) { return u.coordinadorId === selCoordDest.value; });
+              // Reasignar subordinados del origen al destino
+              for (const sub of subsDest) {
+                if (sub.id !== selCoord.value) {
+                  await FS.actualizar("usuarios", sub.id, { coordinadorId: selCoordDest.value });
+                }
+              }
+              // Reasignar líderes del origen al destino
+              for (const lid of lideresDest) {
+                if (lid.id !== selCoord.value) {
+                  await FS.actualizar("usuarios", lid.id, { coordinadorId: selCoordDest.value });
+                }
+              }
+            }
+
+            UI.toast("COORDINADOR MOVIDO CORRECTAMENTE");
+            await cargar();
+            pintarSelectCoord();
+          } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+          UI.cargando(false);
+        });
+
+        // Mantener lógica original de mover líder (adaptada)
+        async function cargarLideres() {
+          try {
+            const res = await Promise.all([
+              FS.usuariosPorRol("LIDER"), FS.usuariosPorRol("SUBCOORDINADOR")
+            ]);
+            lideres = res[0]; subs = res[1];
+            pintarFormularioLider();
+            pintarEstadoLider(res[2]);
+          } catch (e) {
+            zonaForm.innerHTML = UI.alerta("error", e.message);
+          }
+        }
+
+        function pintarFormularioLider() {
+          zonaForm.innerHTML =
+            '<div class="formulario">' +
+            '<div class="campo"><label>LÍDER A UBICAR</label><select id="m-lider">' +
+            '<option value="">— SELECCIONE LÍDER —</option>' +
+            lideres.map(function (l) {
+              return '<option value="' + l.id + '">' + U.esc(U.UP(l.nombre)) +
+                     " · " + U.esc(U.UP(l.barrio || "SIN BARRIO")) + "</option>";
+            }).join("") +
+          "</select></div>" +
+          '<div class="campo"><label>SUB-COORDINADOR DE DESTINO</label><select id="m-sub" disabled>' +
+          '<option value="">— SELECCIONE PRIMERO EL LÍDER —</option>' +
+          "</select></div>" +
+          '<div id="m-info"></div>' +
+          '<div class="acciones-form"><button class="btn btn-primario" id="m-guardar">GUARDAR UBICACIÓN</button></div>' +
+          "</div>";
+
+          const selLider = zonaForm.querySelector("#m-lider");
+          const selSub = zonaForm.querySelector("#m-sub");
+          const info = zonaForm.querySelector("#m-info");
+
+          selLider.addEventListener("change", function () {
+            const l = lideres.find(function (x) { return x.id === selLider.value; });
+            if (!l) {
+              selSub.innerHTML = '<option value="">— SELECCIONE PRIMERO EL LÍDER —</option>';
+              selSub.disabled = true; info.innerHTML = ""; return;
+            }
+            const subsDelBarrio = subs.filter(function (s) { return U.UP(s.barrio) === U.UP(l.barrio); });
+            const todos = subsDelBarrio.length ? subsDelBarrio : subs;
+            selSub.innerHTML = '<option value="">— SELECCIONE SUB-COORDINADOR —</option>' +
+              todos.map(function (s) {
+                return '<option value="' + s.id + '">' + U.esc(U.UP(s.nombre)) +
+                       " (" + U.esc(U.UP(s.barrio)) + ")</option>";
+              }).join("");
+            selSub.disabled = false;
+            const actual = subs.find(function (s) { return s.id === l.subcoordinadorId; });
+            info.innerHTML = UI.alerta("info",
+              "LÍDER ACTUALMENTE EN: " + (actual ? U.UP(actual.nombre) : "NINGÚN GRUPO") +
+              " · BARRIO: " + U.UP(l.barrio || "—") +
+              " · ESTADO: " + U.UP(l.estado));
+          });
+
+          zonaForm.querySelector("#m-guardar").addEventListener("click", async function () {
+            if (!selLider.value) { UI.toast("SELECCIONE EL LÍDER", "error"); return; }
+            if (!selSub.value) { UI.toast("SELECCIONE EL SUB-COORDINADOR", "error"); return; }
+            const sub = subs.find(function (s) { return s.id === selSub.value; });
+            UI.cargando(true);
+            try {
+              await FS.actualizar("usuarios", selLider.value, {
+                subcoordinadorId: selSub.value,
+                coordinadorId: sub.coordinadorId || null,
+                barrio: sub.barrio || null,
+                actualizadoEn: U.ahora()
+              });
+              UI.toast("LÍDER UBICADO EN EL NUEVO GRUPO");
+              await cargarLideres();
+            } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+            UI.cargando(false);
+          });
+        }
+
+        function pintarEstadoLider(todos) {
+          zonaEstado.innerHTML =
+            '<div class="barra no-imprimir"><input class="entrada-buscar" type="search" placeholder="BUSCAR USUARIO..."></div>' +
+            '<div id="zona-est">';
+          const busc = zonaEstado.querySelector(".entrada-buscar");
+          const z = zonaEstado.querySelector("#zona-est");
+
+          function pintarLista() {
+            const q = U.UP(busc.value);
+            const lista = todos.filter(function (u) {
+              return u.id !== App.perfil.id &&
+                (!q || U.contiene(U.unir([u.nombre, u.usuario, u.rol, u.barrio]), q));
+            });
+            z.innerHTML = UI.tabla(["NOMBRE", "ROL", "BARRIO", "ESTADO", "CAMBIAR ESTADO"],
+              lista.map(function (u) {
+                return [
+                  U.esc(U.UP(u.nombre)),
+                  UI.sello(ROL_NOMBRE[u.rol] || u.rol, { COORDINADOR: "verde", SUBCOORDINADOR: "azul", LIDER: "gris" }),
+                  U.esc(U.UP(u.barrio || "—")),
+                  UI.selloEstado(u.estado),
+                  '<div class="grp-acciones">' +
+                    '<button class="btn btn-mini btn-exito" data-est="ACTIVO" data-id="' + u.id + '">ACTIVAR</button>' +
+                    '<button class="btn btn-mini btn-peligro" data-del="' + u.id + '" data-rol="' + u.rol + '" data-usuario="' + U.esc(u.usuario) + '" data-nombre="' + U.esc(U.UP(u.nombre)) + '">ELIMINAR</button>' +
+                    
+                  "</div>"
+                ];
+              })
+            );
+            z.querySelectorAll("[data-est]").forEach(function (b) {
+              b.addEventListener("click", async function () {
+                UI.cargando(true);
+                try {
+                  await FS.actualizar("usuarios", b.dataset.id, { estado: b.dataset.est, actualizadoEn: U.ahora() });
+                  UI.toast("ESTADO ACTUALIZADO");
+                  await pintarLista();
+                } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+                UI.cargando(false);
+              });
+            });
+            z.querySelectorAll("[data-del]").forEach(function (b) {
+              b.addEventListener("click", async function () {
+                // Validar antes de eliminar coordinador
+                if (b.dataset.rol === "COORDINADOR") {
+                  const tieneDependientes = await FS.verificarDependientes(b.id);
+                  if (tieneDependientes) {
+                    UI.toast("NO SE PUEDE ELIMINAR: Tiene líderes y subordinados dependientes. Múvalos primero (UBICAR / MOVER LÍDER).", "error");
+                    UI.cargando(false);
+                    return;
+                  }
+                }
+                UI.cargando(true);
+                try {
+                  await FS.eliminar("usuarios", b.dataset.id);
+                  UI.toast("USUARIO ELIMINADO EXITOSAMENTE", "ok");
+                  await pintarLista();
+                } catch (e) { UI.toast("ERROR: " + e.message, "error"); }
+                UI.cargando(false);
+              });
+            });
+          }
+
+          await pintarLista();
+        }
+
+        await cargar();
+        await cargarLideres();
+      }
+    };
+  }
+
+  /* ==================================================================
+     VISTA 5 — ENVIAR MENSAJES (DIRECTO O GENERAL AL BARRIO)
+     ================================================================== */
+  function vistaMensajes() {
+    return {
+      etiqueta: "ENVIAR MENSAJES", icono: "✉️",
+      async pintar(cont) {
+        cont.innerHTML =
+          UI.encabezado("ENVÍO DE MENSAJES DESCENDENTES", "DOS ALCANCES: (1) DIRECTO AL COORDINADOR DE UN BARRIO O (2) GENERAL A TODO EL GRUPO DEL BARRIO.") +
+          '<div class="tarjeta"><h3>NUEVO MENSAJE</h3><div id="zona-form"></div></div>' +
+          '<div class="tarjeta"><h3>MENSAJES ENVIADOS</h3>' +
+            '<p class="menor">LOS MENSAJES ENVIADOS NO SE MUESTRAN POR DEFECTO.</p>' +
+            '<div class="acciones-form"><button class="btn btn-primario" id="btn-ver-enviados-coord">VER MENSAJES ENVIADOS</button></div>' +
+            '<div id="zona-lista" style="display:none"></div></div>' +
+          '<div class="tarjeta"><h3>ESCALAMIENTOS RECIBIDOS</h3><div id="zona-esc"></div></div>';
+
+        const zonaForm = cont.querySelector("#zona-form");
+        const zonaLista = cont.querySelector("#zona-lista");
+        const zonaEsc = cont.querySelector("#zona-esc");
+        let coordinadores = [];
+
+        // Abrir modal de mensajes enviados
+        setTimeout(function () {
+          const btn = cont.querySelector("#btn-ver-enviados-coord");
+          if (btn) btn.addEventListener("click", function () {
+            App.abrirMensajesEnviadosCoord();
+          });
+        }, 0);
+
+        async function cargar() {
+          UI.cargando(true);
+          try {
+            coordinadores = await FS.usuariosPorRol("COORDINADOR");
+            pintarFormulario();
+            await pintarLista();
+            // Escalamientos recibidos
+            if (zonaEsc) {
+              try {
+                const escs = await FS.escalamientos();
+                zonaEsc.innerHTML = escs.length
+                  ? escs.map(function (e) {
+                      const adj = (e.adjuntos || []).length
+                        ? '<div class="lista-adjuntos">' + e.adjuntos.map(function (a) {
+                            return '<a class="adjunto" href="' + U.esc(a.url) + '" target="_blank" rel="noopener">📎 ' + U.esc(U.UP(a.nombre)) + "</a>";
+                          }).join("") + "</div>"
+                        : '<p class="menor">SIN ARCHIVOS ADJUNTOS.</p>';
+                      return '<div class="mensaje"><div class="cab"><span><strong>BARRIO:</strong> ' + U.esc(U.UP(e.barrio)) +
+                        " · <strong>COORDINADOR:</strong> " + U.esc(U.UP(e.coordinadorNombre || "—")) + "</span>" +
+                        "<span>" + U.esc(U.fecha(e.fecha)) + "</span></div>" +
+                        '<div class="cuerpo"><strong>' + U.esc(U.UP(e.asunto)) + "</strong><br>" + U.esc(U.UP(e.mensaje)) + "</div>" + adj + "</div>";
+                    }).join("")
+                  : UI.alerta("info", "NO HAY ESCALAMIENTOS REGISTRADOS.");
+              } catch (ex) { zonaEsc.innerHTML = UI.alerta("error", ex.message); }
+            }
+          } catch (e) {
+            zonaForm.innerHTML = UI.alerta("error", e.message);
+          }
+          UI.cargando(false);
+        }
+
+        function pintarFormulario() {
+          const barrios = coordinadores.map(function (c) { return c.barrio; })
+            .filter(function (b, i, a) { return b && a.indexOf(b) === i; });
+
+          zonaForm.innerHTML =
+            '<div class="formulario">' +
+              '<fieldset class="fieldset"><legend>ALCANCE DEL MENSAJE</legend>' +
+                '<div class="tipo-radio">' +
+                  '<label class="sel" data-alc="directo_coordinador">① DIRECTO AL COORDINADOR</label>' +
+                  '<label data-alc="general_barrio">② GENERAL AL BARRIO</label>' +
+                "</div>" +
+              "</fieldset>" +
+              '<div class="campo" id="c-coord"><label>COORDINADOR DESTINO</label><select id="f-coord">' +
+                '<option value="">— SELECCIONE —</option>' +
+                coordinadores.map(function (c) {
+                  return '<option value="' + c.id + '">' + U.esc(U.UP(c.nombre)) +
+                         " · " + U.esc(U.UP(c.barrio)) + "</option>";
+                }).join("") + "</select></div>" +
+              '<div class="campo" id="c-barr" style="display:none"><label>BARRIO DESTINO</label><select id="f-barr">' +
+                '<option value="">— SELECCIONE —</option>' +
+                barrios.map(function (b) { return '<option>' + U.esc(U.UP(b)) + "</option>"; }).join("") +
+              "</select></div>" +
+              '<div class="campo"><label>TEXTO DEL MENSAJE</label><textarea id="f-texto" rows="4" placeholder="ESCRIBA LA INSTRUCCIÓN O AVISO..."></textarea></div>' +
+              '<div id="f-error"></div>' +
+              '<div class="acciones-form"><button class="btn btn-primario" id="btn-enviar">ENVIAR MENSAJE</button></div>' +
+            "</div>";
+
+          let alcance = "directo_coordinador";
+          zonaForm.querySelectorAll("[data-alc]").forEach(function (lab) {
+            lab.addEventListener("click", function () {
+              alcance = lab.dataset.alc;
+              zonaForm.querySelectorAll("[data-alc]").forEach(function (x) { x.classList.remove("sel"); });
+              lab.classList.add("sel");
+              zonaForm.querySelector("#c-coord").style.display = alcance === "directo_coordinador" ? "" : "none";
+              zonaForm.querySelector("#c-barr").style.display = alcance === "general_barrio" ? "" : "none";
+            });
+          });
+
+          zonaForm.querySelector("#btn-enviar").addEventListener("click", async function () {
+            const errBox = zonaForm.querySelector("#f-error");
+            errBox.innerHTML = "";
+            const texto = U.UP(zonaForm.querySelector("#f-texto").value);
+            if (!U.requerido(texto)) { errBox.innerHTML = UI.alerta("error", "EL MENSAJE ES OBLIGATORIO"); return; }
+
+            let paraCoordinadorId = null, barrio = null;
+
+            if (alcance === "directo_coordinador") {
+              const id = zonaForm.querySelector("#f-coord").value;
+              if (!id) { errBox.innerHTML = UI.alerta("error", "SELECCIONE EL COORDINADOR DESTINO"); return; }
+              const c = coordinadores.find(function (x) { return x.id === id; });
+              paraCoordinadorId = id;
+              barrio = c.barrio;
+            } else {
+              const b = zonaForm.querySelector("#f-barr").value;
+              if (!b) { errBox.innerHTML = UI.alerta("error", "SELECCIONE EL BARRIO DESTINO"); return; }
+              barrio = b;
+            }
+
+            UI.cargando(true);
+            try {
+              await FS.crear("mensajes", {
+                alcance: alcance,
+                deId: App.perfil.id,
+                deNombre: App.perfil.nombre,
+                paraCoordinadorId: paraCoordinadorId,
+                paraSubId: null,
+                barrio: U.UP(barrio),
+                texto: texto,
+                fecha: U.ahora(),
+                fechaMs: U.ahoraMs()
+              });
+              UI.toast("MENSAJE ENVIADO");
+              zonaForm.querySelector("#f-texto").value = "";
+              await pintarLista();
+            } catch (e) { errBox.innerHTML = UI.alerta("error", e.message); }
+            UI.cargando(false);
+          });
+
+          await pintarLista();
+        }
+
+        await cargar();
+      }
+    };
+  }
+
+  /* ==================================================================
+     REGISTRO DEL MÓDULO
+     ================================================================== */
+  App.registrarRol("COORDINADOR", {
+    orden: ["aprobaciones", "equipo", "crear", "ubicar", "mensajeria",
+            "recaudacion", "consolidado", "quejas"],
+    vistas: {
+      aprobaciones: vistaAprobaciones(),
+      equipo: vistaEquipo(),
+      crear: vistaCrearUsuarios(),
+      ubicar: vistaUbicar(),
+      mensajeria: vistaMensajeria(),
+      recaudacion: vistaRecaudacion(),
+      consolidado: vistaConsolidadoRecaudacion(),
+      quejas: vistaQuejas()
+    }
+  });

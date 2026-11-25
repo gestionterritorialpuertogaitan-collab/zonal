@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#071a3d">
+  <meta name="description" content="RED ZONAL Puerto Gaitán - Gestión territorial y operativa de equipos - Meta">
+  <title>RED ZONAL — PUERTO GAITÁN, META</title>
+  <link rel="icon" type="image/png" href="img/logo.png">
+  <link rel="apple-touch-icon" href="img/logo.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/estilos.css?v=18">
+</head>
+
+<body>
+
+  <!-- ================= CARGANDO GLOBAL ================= -->
+  <div id="cargando-global" class="cargando-global oculto">
+    <div class="cargando-caja"><span class="spinner"></span><span>PROCESANDO...</span></div>
+  </div>
+
+  <!-- ================= PANTALLA DE LOGIN ================= -->
+  <div id="pantalla-login" class="pantalla">
+    <div class="fondo-login"></div>
+
+    <div class="login-cabecera">
+      <div class="login-cab-tit">RED ZONAL — PUERTO GAITÁN</div>
+      <div class="login-cab-sub">
+        <span class="c-teal">GESTIÓN TERRITORIAL</span> <span class="c-orange">• META</span>
+      </div>
+    </div>
+
+    <div class="tarjeta-login">
+
+      <div class="logo-login">
+        <img src="img/logo.png" alt="RED ZONAL PUERTO GAITÁN">
+      </div>
+
+      <div class="marca">
+        <div class="marca-1">RED ZONAL</div>
+        <div class="marca-2">— PUERTO GAITÁN —</div>
+        <div class="marca-3">
+          <span class="c-teal">GESTIÓN TERRITORIAL</span> <span class="c-orange">• META</span>
+        </div>
+      </div>
+
+      <form id="form-login" autocomplete="off" novalidate>
+
+        <div class="campo">
+          <label for="login-usuario">USUARIO O CÉDULA</label>
+          <div class="caja-input">
+            <span class="ico-campo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </span>
+            <input id="login-usuario" type="text" placeholder="Ingresa tu usuario o cédula" required>
+          </div>
+        </div>
+
+        <div class="campo">
+          <label for="login-password">CONTRASEÑA</label>
+          <div class="caja-input">
+            <span class="ico-campo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+            </span>
+            <input id="login-password" type="password" placeholder="Ingresa tu contraseña" required>
+            <button type="button" id="btn-ojo" class="btn-ojo" aria-label="MOSTRAR CONTRASEÑA" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                <path d="M1 1l22 22"></path>
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="button" id="btn-olvide" class="link-olvide">¿Olvidaste tu contraseña?</button>
+
+        <p id="login-error" class="error-linea oculto"></p>
+
+        <button type="submit" class="btn-ingresar">INGRESAR A LA PLATAFORMA</button>
+      </form>
+
+    </div>
+
+    <div class="pie-login">Versión 1.0.0 · Puerto Gaitán, Meta</div>
+  </div>
+
+  <!-- ================= APLICACIÓN MÓVIL ================= -->
+  <div id="pantalla-app" class="pantalla oculto">
+
+    <header class="topbar">
+      <div id="topbar-usuario-izq" class="topbar-usu-izq" aria-hidden="true">
+        <span id="topbar-primer-nombre" class="usu-izq-nom"></span>
+        <span id="topbar-rol-corto" class="usu-izq-rol"></span>
+      </div>
+      <div class="topbar-marca">
+        <strong class="marca-top-1">RED ZONAL — PUERTO GAITÁN</strong>
+        <span class="marca-top-2">
+          <span class="c-teal">GESTIÓN TERRITORIAL</span> <span class="c-orange">• META</span>
+        </span>
+        <span class="marca-top-usu" id="topbar-usuario-linea">—</span>
+      </div>
+      <div class="topbar-acc">
+        <button id="btn-campana" class="btn-icono btn-campana" aria-label="NOTIFICACIONES" title="MENSAJES NUEVOS">
+          🔔
+          <span id="badge-campana" class="badge-rojo oculto">0</span>
+        </button>
+        <button id="btn-salir" class="btn-salir-top">SALIR</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <div id="capa-menu" class="capa-menu oculto"></div>
+      <nav id="menu-lateral" class="menu-lateral"></nav>
+      <main id="contenido" class="contenido"></main>
+    </div>
+
+    <nav id="nav-inferior" class="nav-inferior no-imprimir"></nav>
+  </div>
+
+  <!-- ================= MODAL ================= -->
+  <div id="modal" class="modal oculto">
+    <div class="modal-caja" role="dialog" aria-modal="true">
+      <div class="modal-tit">
+        <span id="modal-titulo">—</span>
+        <button id="modal-cerrar" class="btn-icono" aria-label="CERRAR">✕</button>
+      </div>
+      <div class="modal-cuerpo" id="modal-cuerpo"></div>
+      <div class="modal-pie" id="modal-pie"></div>
+    </div>
+  </div>
+  <!-- ================= PANTALLA COMPLETA DE DATOS ================= -->
+  <div id="visor-datos-full" class="visor-full oculto" role="dialog" aria-modal="true">
+    <div class="visor-full-cab">
+      <span id="visor-full-titulo">DATOS RECAUDADOS</span>
+      <button type="button" id="visor-full-cerrar" class="visor-full-x" aria-label="CERRAR">✕</button>
+    </div>
+    <div id="visor-full-cuerpo" class="visor-full-cuerpo"></div>
+    <div id="visor-full-pie" class="visor-full-pie"></div>
+  </div>
+  <!-- ================= TOAST ================= -->
+  <div id="toast" class="toast oculto"></div>
+
+  <!-- ================= LIBRERÍAS FIREBASE (COMPAT) ================= -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+
+  <!-- ================= PDF (jsPDF + autoTable) ================= -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- ================= NÚCLEO DE LA APLICACIÓN ================= -->
+  <script src="js/nucleo.js?v=18"></script>
+  <script src="js/firebase-config.js?v=18"></script>
+  <script src="js/utilidades.js?v=18"></script>
+  <script src="js/firestore.js?v=18"></script>
+  <script src="js/ui.js?v=18"></script>
+  <script src="js/seed.js?v=18"></script>
+  <script src="js/auth.js?v=18"></script>
+
+  <!-- ================= MÓDULOS POR ROL ================= -->
+  <script src="js/modulos/comun.js?v=18"></script>
+  <script src="js/modulos/area.js?v=18"></script>
+  <script src="js/modulos/zonal.js?v=18"></script>
+  <script src="js/modulos/publicidad.js?v=18"></script>
+  <script src="js/modulos/compras.js?v=18"></script>
+  <script src="js/modulos/coordinador.js?v=18"></script>
+  <script src="js/modulos/subcoordinador.js?v=18"></script>
+  <script src="js/modulos/lider.js?v=18"></script>
+
+  <!-- ================= ARRANQUE ================= -->
+  <script src="js/app.js?v=18"></script>
+  <script src="js/notificacion-mensajes.js"></script>
+</body>
+
+</html>
